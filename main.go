@@ -44,9 +44,9 @@ var reUseBody io.ReadCloser
 //	  username:
 //		 password:
 //		 url:
-var FSusername string
-var FSpassword string
-var FSApplianceFQDN string
+var FSusername = ""
+var FSpassword = ""
+var FSApplianceFQDN = ""
 
 // encryption key used to decrypt helper.yml
 // create 'helper.key' file to store appCode. Copy below code format for yml
@@ -56,7 +56,7 @@ var FSApplianceFQDN string
 var appCode string
 
 // This function is used to pass encrypted credentials.
-// Don't forget to update the appCode with a new 32 bit string per application.
+// Don't forget to update the key file with a new 32 bit string per application.
 func passBall(ct string) string {
 	var plaintext []byte
 	ciphertext, _ := hex.DecodeString(ct)
@@ -218,7 +218,7 @@ func GetDSTZones(zoneID string) []string {
 // Get array of source zones
 func GetSRCZones(zoneID string) []string {
 	var SRCZones []string
-	body := buildRequest(fmt.Sprintf("/seg/api/v1/policies/visualization?matrixId=0&dstZoneId=%s",zoneID), http.MethodGet)
+	body := buildRequest(fmt.Sprintf("/seg/api/v1/policies/visualization?matrixId=0&dstZoneId=%s", zoneID), http.MethodGet)
 
 	jsonParsed, err := gabs.ParseJSON(body)
 	if err != nil {
@@ -329,13 +329,14 @@ func CheckOccurrences(SRCZone string, DSTZone string) (bool, error) {
 
 func buildPostRequest(apiUri string, method string, payload string, DisableCompress bool) []byte {
 	site := fmt.Sprintf("https://" + FSApplianceFQDN + apiUri)
+	var transport *http.Transport
 	if !DisableCompress {
-		transport := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		transport = &http.Transport{
+			TLSClientConfig:    &tls.Config{InsecureSkipVerify: true},
 			DisableCompression: true,
 		}
 	} else {
-		transport := &http.Transport{
+		transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
 	}
@@ -375,6 +376,11 @@ func buildPostRequest(apiUri string, method string, payload string, DisableCompr
 		return nil
 	}
 	defer res.Body.Close()
+	if res.StatusCode == 200 {
+		fmt.Printf("...Good: %d\n", res.StatusCode)
+	} else {
+		fmt.Printf("...Bad: %d\n", res.StatusCode)
+	}
 
 	gzr, err := gzip.NewReader(res.Body)
 	if err != nil {
@@ -393,7 +399,7 @@ func buildPostRequest(apiUri string, method string, payload string, DisableCompr
 
 // Drill down the matrix to the bottom most zones given any combination of source and destination zones. Return array of destinations zones.
 func DSTzoneToZoneConnections(SRCZone string, DSTZone string) ([]string, error) {
-	fmt.Println("Reading DST Zone to Zone Connections")
+	fmt.Print("Reading DST Zone to Zone Connections")
 	var DSTZones []string
 
 	body := buildPostRequest("/seg/api/v1/zone-to-zone", http.MethodPost, fmt.Sprintf(`{"matrixId":"0","srcZoneId":"%s","dstZoneId":"%s","shouldOnlyShowPolicyViolation":false}`, SRCZone, DSTZone), false)
@@ -411,7 +417,7 @@ func DSTzoneToZoneConnections(SRCZone string, DSTZone string) ([]string, error) 
 
 // Drill down the matrix to the bottom most zones given any combination of source and destination zones. Return array of source zones.
 func SRCzoneToZoneConnections(SRCZone string, DSTZone string) ([]string, error) {
-	fmt.Println("Reading SRC Zone to Zone Connections")
+	fmt.Print("Reading SRC Zone to Zone Connections")
 	var SRCZones []string
 
 	body := buildPostRequest("/seg/api/v1/zone-to-zone", http.MethodPost, fmt.Sprintf(`{"matrixId":"0","srcZoneId":"%s","dstZoneId":"%s","shouldOnlyShowPolicyViolation":false}`, SRCZone, DSTZone), false)
@@ -503,15 +509,16 @@ func ExportData(SRCZone string, DSTZone string) {
 
 // Search back the number of days by given int. Default is 3 day lookback
 func timeBasedFilter(days int) {
-	fmt.Println("Applying filter based on days specified")
-	body := buildPostRequest("/seg/api/v1/user/configuration/timeBasedFilter", http.MethodPost, fmt.Sprintf("{\"lastDaysFilter\":%d}", days), false)
+	fmt.Print("Applying filter based on days specified")
+	buildPostRequest("/seg/api/v1/user/configuration/timeBasedFilter", http.MethodPut, fmt.Sprintf("{\"lastDaysFilter\":%d}", days), false)
 
-	fmt.Println(string(body))
+	//fmt.Println(string(body))
 }
 
 // Clear any filter or time range from previous sessions
 func ClearFilter() {
-
+	fmt.Print("Clearing any custom filters")
+	//TODO: Needs fixed. Not working. Generates a Server 500 code
 	buildPostRequest("/seg/api/v2/filter", http.MethodPut, `{"srcZones":[],"dstZones":[],"services":[],"protocols":[],"isExclude":false,"filterEnabled":false,"hasFilters":true,"srcIp":"","dstIp":"","timeRangeFilter":null}`, true)
 
 }
@@ -537,22 +544,24 @@ func StringPrompt(label string) string {
 }
 
 func main() {
+	if FSpassword == "" { //checks for hardcoded credentials at the top of the page
+		viper.AddConfigPath(".")
+		viper.SetConfigName("key") // Register config file name (no extension)
+		viper.SetConfigType("yml") // Look for specific type
+		var err = viper.ReadInConfig()
+		if err != nil {
+			log.Println("NOTE: Secure credentials not provided or key file could not be read. No defaults set.")
+		} else {
+			appCode = viper.GetString("helper.key")
+			viper.SetConfigName("helper") // Change file and reread contents.
+			err = viper.ReadInConfig()
+			CheckError(err)
 
-	viper.AddConfigPath(".")
-	viper.SetConfigName("key") // Register config file name (no extension)
-	viper.SetConfigType("yml") // Look for specific type
-	var err = viper.ReadInConfig()
-	CheckError(err)
-
-	appCode = viper.GetString("helper.key")
-
-	viper.SetConfigName("helper") // Change file and reread contents.
-	err = viper.ReadInConfig()
-	CheckError(err)
-
-	FSusername = passBall(viper.GetString("helper.username"))
-	FSpassword = passBall(viper.GetString("helper.password"))
-	FSApplianceFQDN = viper.GetString("helper.url")
+			FSusername = passBall(viper.GetString("helper.username"))
+			FSpassword = passBall(viper.GetString("helper.password"))
+			FSApplianceFQDN = viper.GetString("helper.url")
+		}
+	}
 
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	GetDSTZonesFlag := flag.Bool("d", false, "Get all destination zones from selected source.")
